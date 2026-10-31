@@ -7,7 +7,7 @@ on:
       - main
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     permissions:
@@ -15,67 +15,34 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ap-south-1
 
-      - name: Login to Amazon ECR
-        id: login-ecr
+      - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build Docker image
-        run: |
-          docker build -t practice ./proj
-
-      - name: Push Docker image to ECR
+      - name: Build and Push Docker Image
         env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          REGISTRY: 354780327224.dkr.ecr.ap-south-1.amazonaws.com
+          IMAGE_TAG: latest
         run: |
-          docker tag practice:latest $REGISTRY/practice:$IMAGE_TAG
+          docker build -t $REGISTRY/practice:$IMAGE_TAG ./proj
           docker push $REGISTRY/practice:$IMAGE_TAG
 
-      - name: Create updated task definition
-        env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          aws ecs describe-task-definition \
-            --task-definition project2-task \
-            --query taskDefinition > task-definition.json
-
-          jq --arg IMAGE "$REGISTRY/practice:$IMAGE_TAG" \
-            'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
-            | .containerDefinitions |= map(
-                if .name == "project2-container"
-                then .image = $IMAGE
-                else .
-                end
-              )' task-definition.json > updated-task-definition.json
-
-      - name: Register new task definition revision
-        id: task-def
-        run: |
-          TASK_DEF_ARN=$(aws ecs register-task-definition \
-            --cli-input-json file://updated-task-definition.json \
-            --query 'taskDefinition.taskDefinitionArn' \
-            --output text)
-
-          echo "task-definition-arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
-
-      - name: Deploy to ECS Fargate
+      - name: Force New Deployment
         run: |
           aws ecs update-service \
             --cluster project2-cluster \
             --service project2-service \
-            --task-definition "${{ steps.task-def.outputs.task-definition-arn }}"
+            --force-new-deployment
 
-      - name: Wait for ECS deployment
+      - name: Wait for Deployment
         run: |
           aws ecs wait services-stable \
             --cluster project2-cluster \
